@@ -95,6 +95,33 @@ wss.on('connection', (ws) => {
 
 let vcMembers = [];
 
+// --- Auto-disconnect logic ---
+const disconnectTimeouts = new Map();
+
+function scheduleAutoDisconnect(voiceChannel) {
+    const guildId = voiceChannel.guild.id;
+    // Clear any existing timeout
+    if (disconnectTimeouts.has(guildId)) {
+        clearTimeout(disconnectTimeouts.get(guildId));
+        disconnectTimeouts.delete(guildId);
+    }
+    // Only schedule if bot is alone (no other non-bot members)
+    const nonBotMembers = voiceChannel.members.filter(m => !m.user.bot && m.id !== client.user.id);
+    if (nonBotMembers.size === 0) {
+        const timeout = setTimeout(() => {
+            const connection = getVoiceConnection(guildId);
+            if (connection) {
+                connection.disconnect();
+                console.log(`[AUTO-DISCONNECT] Bot was alone for 5 minutes in ${voiceChannel.name}, disconnected.`);
+            }
+            disconnectTimeouts.delete(guildId);
+        }, 5 * 60 * 1000); // 5 minutes
+        disconnectTimeouts.set(guildId, timeout);
+        console.log(`[AUTO-DISCONNECT] Scheduled auto-disconnect in 5 minutes for ${voiceChannel.name}`);
+    }
+}
+// --- End auto-disconnect logic ---
+
 function sendMembersUpdate(voiceChannel) {
     if (!voiceChannel) return;
 
