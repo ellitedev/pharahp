@@ -21,74 +21,81 @@ const rest = new REST({ version: '10' }).setToken(token);
 const WebSocket = require('ws');
 const wsport = process.env.wssport;
 const wss = new WebSocket.Server({ port: wsport });
-let wsClient = null;
-console.log(`WebSocket server started on port ${wsport}`)
-
-let vcMembers = [];
+let wsClients = new Set(); // Store all clients
 
 function sendToWs(data) {
     if (!data) {
         console.error('Attempted to send empty data');
         return false;
     }
-
     const payload = typeof data === 'object' ? JSON.stringify(data) : data;
 
-    if (!wsClient) {
-        console.error('WebSocket client not initialized');
-        return false;
+    let sent = false;
+    wsClients.forEach(wsClient => {
+        if (wsClient.readyState === WebSocket.OPEN) {
+            try {
+                wsClient.send(payload);
+                sent = true;
+            } catch (err) {
+                console.error('WebSocket send error:', err, 'Payload:', payload);
+            }
+        }
+    });
+    if (!sent) {
+        console.error('No WebSocket clients to send to.');
     }
+    return sent;
+}
 
-    if (wsClient.readyState !== WebSocket.OPEN) {
-        console.error('WebSocket is not open. ReadyState:', wsClient.readyState);
-        return false;
-    }
-
-    try {
-        wsClient.send(payload);
-        return true;
-    } catch (err) {
-        console.error('WebSocket send error:', err, 'Payload:', payload);
-        return false;
-    }
+// Helper to generate a random client ID
+function generateClientId() {
+    return 'client_' + Math.random().toString(36).substr(2, 9);
 }
 
 wss.on('connection', (ws) => {
-    console.log(`WebSocket client connected.`);
-    wsClient = ws;
+    // Assign a random client ID
+    const clientId = generateClientId();
+    ws._clientId = clientId;
+
+    console.log(`WebSocket client connected: ${clientId}`);
+    wsClients.add(ws);
 
     const botReadyMsg = {
         type: 'bot_ready',
         username: client.user ? client.user.tag : null
     };
-    sendToWs(JSON.stringify(botReadyMsg));
+    ws.send(JSON.stringify(botReadyMsg));
 
     if (client.isReady()) {
         const botConnectedToDiscordMsg = {
             type: 'channel_monitored',
             success: true
-        }; sendToWs(JSON.stringify(botConnectedToDiscordMsg));
+        };
+        ws.send(JSON.stringify(botConnectedToDiscordMsg));
 
         if (vcMembers.length > 0) {
             console.log(`[EVENT] Re-sending members_update`);
-            sendToWs({
+            ws.send(JSON.stringify({
                 type: 'members_update',
                 members: vcMembers
-            });
+            }));
         }
     }
 
     ws.on('close', () => {
-        console.log(`WebSocket client disconnected.`);
-        wsClient = null;
+        console.log(`WebSocket client disconnected: ${ws._clientId}`);
+        wsClients.delete(ws);
     });
 
     ws.on('error', (error) => {
-        console.error('WebSocket error:', error);
+        console.error(`WebSocket error from client ${ws._clientId}:`, error);
+        wsClients.delete(ws);
     });
 });
 
-async function sendMembersUpdate(voiceChannel) {
+let vcMembers = [];
+
+function sendMembersUpdate(voiceChannel) {
     if (!voiceChannel) return;
 
     // Format the member data for the client
