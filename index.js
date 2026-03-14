@@ -169,7 +169,18 @@ client.on('interactionCreate', async (interaction) => {
                 vcConn.on(VoiceConnectionStatus.Ready, () => {
                     const spkMap = vcConn.receiver.speaking;
 
+                    const subscribeUser = (userId) => {
+                        if (!vcConn.receiver.subscriptions.has(userId)) {
+                            vcConn.receiver.subscribe(userId, { end: { behavior: 'manual' } });
+                        }
+                    };
+
+                    voiceChannel.members.forEach(member => {
+                        if (!member.user.bot) subscribeUser(member.id);
+                    });
+
                     spkMap.on('start', (userId) => {
+                        subscribeUser(userId);
                         sendToWs({
                             type: 'speaking_update',
                             user_id: userId,
