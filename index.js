@@ -212,7 +212,9 @@ client.on('interactionCreate', async (interaction) => {
             const connection = getVoiceConnection(interaction.guildId);
             if (connection) {
                 try {
-                    connection.disconnect();
+                    connection.destroy();
+                    vcMembers = [];
+                    sendToWs({ type: 'members_update', members: [] });
                     await interaction.reply({ content: '✅ Disconnected from voice channel.', flags: 64 });
                     console.log(`Disconnected from voice channel in guild: ${interaction.guild.name}`);
                 } catch (error) {
