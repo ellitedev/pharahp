@@ -212,6 +212,7 @@ client.on('interactionCreate', async (interaction) => {
             const connection = getVoiceConnection(interaction.guildId);
             if (connection) {
                 try {
+                    await interaction.guild.members.me.voice.disconnect();
                     connection.destroy();
                     vcMembers = [];
                     sendToWs({ type: 'members_update', members: [] });
