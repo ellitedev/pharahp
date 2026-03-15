@@ -1,8 +1,6 @@
 require('dotenv').config();
-require('discord.js');
-require('@discordjs/voice')
 const { Client, Events, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType } = require('discord.js');
-const { joinVoiceChannel, getVoiceConnection, getVoiceConnections, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
+const { joinVoiceChannel, getVoiceConnection, getVoiceConnections, VoiceConnectionStatus } = require('@discordjs/voice');
 const token = process.env.token;
 const GUILD_ID = process.env.guildid;
 const refDen = process.env.refden;
@@ -21,7 +19,7 @@ const rest = new REST({ version: '10' }).setToken(token);
 const WebSocket = require('ws');
 const wsport = process.env.wssport;
 const wss = new WebSocket.Server({ port: wsport });
-let wsClients = new Set(); // Store all clients
+let wsClients = new Set();
 
 function sendToWs(data) {
     if (!data) {
@@ -47,13 +45,11 @@ function sendToWs(data) {
     return sent;
 }
 
-// Helper to generate a random client ID
 function generateClientId() {
     return 'client_' + Math.random().toString(36).substr(2, 9);
 }
 
 wss.on('connection', (ws) => {
-    // Assign a random client ID
     const clientId = generateClientId();
     ws._clientId = clientId;
 
@@ -95,18 +91,15 @@ wss.on('connection', (ws) => {
 
 let vcMembers = [];
 
-// --- Auto-disconnect logic ---
 const disconnectTimeouts = new Map();
 
 function scheduleAutoDisconnect(voiceChannel) {
     const guildId = voiceChannel.guild.id;
-    // Clear any existing timeout
     if (disconnectTimeouts.has(guildId)) {
         clearTimeout(disconnectTimeouts.get(guildId));
         disconnectTimeouts.delete(guildId);
     }
-    // Only schedule if bot is alone (no other non-bot members)
-    const nonBotMembers = voiceChannel.members.filter(m => !m.user.bot && m.id !== client.user.id);
+    const nonBotMembers = voiceChannel.members.filter(m => !m.user.bot);
     if (nonBotMembers.size === 0) {
         const timeout = setTimeout(() => {
             const connection = getVoiceConnection(guildId);
@@ -115,19 +108,17 @@ function scheduleAutoDisconnect(voiceChannel) {
                 console.log(`[AUTO-DISCONNECT] Bot was alone for 5 minutes in ${voiceChannel.name}, disconnected.`);
             }
             disconnectTimeouts.delete(guildId);
-        }, 5 * 60 * 1000); // 5 minutes
+        }, 5 * 60 * 1000);
         disconnectTimeouts.set(guildId, timeout);
         console.log(`[AUTO-DISCONNECT] Scheduled auto-disconnect in 5 minutes for ${voiceChannel.name}`);
     }
 }
-// --- End auto-disconnect logic ---
 
 function sendMembersUpdate(voiceChannel) {
     if (!voiceChannel) return;
 
-    // Format the member data for the client
     const members = voiceChannel.members
-        .filter(member => member.id !== client.user.id)
+        .filter(member => !member.user.bot)
         .map(member => ({
             id: member.id,
             username: member.user.username,
@@ -219,10 +210,7 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
 
     if (!connection) return;
 
-    currentConnection = connection;
-
     const botChannelId = connection.joinConfig.channelId;
-    botChannel = botChannelId;
 
     const oldChannelId = oldState.channelId;
     const newChannelId = newState.channelId;
@@ -232,6 +220,7 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
         if (voiceChannel && voiceChannel.type === ChannelType.GuildVoice) {
             console.log(`[EVENT] Voice state change detected in monitored channel. Updating members.`);
             sendMembersUpdate(voiceChannel);
+            scheduleAutoDisconnect(voiceChannel);
         }
     }
 });
@@ -257,7 +246,7 @@ client.on('messageCreate', message => {
     }
 });
 
-client.on('messageUpdate', (newMessage) => {
+client.on('messageUpdate', (oldMessage, newMessage) => {
     if (newMessage.channelId === refDen) {
         const updMsg = {
             command: 'message-updated',
