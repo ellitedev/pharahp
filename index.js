@@ -179,6 +179,8 @@ client.on('interactionCreate', async (interaction) => {
                     selfDeaf: false
                 });
 
+                console.log('[SPEAKING] Connection state on join:', vcConn.state.status);
+
                 vcConn.on(VoiceConnectionStatus.Ready, () => {
                     console.log('[SPEAKING] VoiceConnection Ready event fired.');
                     attachSpeakingListeners(vcConn);
