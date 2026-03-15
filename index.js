@@ -1,6 +1,14 @@
 require('dotenv').config();
 const { Client, Events, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType } = require('discord.js');
 const { joinVoiceChannel, getVoiceConnection, getVoiceConnections, VoiceConnectionStatus, EndBehaviorType } = require('@discordjs/voice');
+
+console.log('[OPUS] Checking opus...');
+try {
+    require('opusscript');
+    console.log('[OPUS] opusscript loaded OK');
+} catch (e) {
+    console.error('[OPUS] opusscript failed to load:', e.message);
+}
 const token = process.env.token;
 const GUILD_ID = process.env.guildid;
 const refDen = process.env.refden;
