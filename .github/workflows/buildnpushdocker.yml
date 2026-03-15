@@ -35,10 +35,6 @@ jobs:
             registry.ellite.dev/ellite/pharahp:latest
             registry.ellite.dev/ellite/pharahp:v${{ steps.version.outputs.VERSION }}
 
-      - name: Trigger Portainer Compose File redeploy
-        run: |
-          curl -X POST https://portainer.ellite.dev/api/stacks/webhooks/b81f9fa8-1605-45f0-9517-a933bca075e2
-
       - name: Trigger Portainer Container redeploy
         run: |
-          curl -X POST https://portainer.ellite.dev/api/webhooks/0aeeb08e-a5a5-4abe-b83c-e9e37ba51b9d
+          curl -X POST https://portainer.ellite.dev/api/webhooks/ba4769b4-bb7b-4fa5-a390-b18da3565a34
