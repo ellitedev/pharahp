@@ -2,7 +2,7 @@ require('dotenv').config();
 require('discord.js');
 require('@discordjs/voice')
 const { Client, Events, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType } = require('discord.js');
-const { joinVoiceChannel, getVoiceConnection, getVoiceConnections, VoiceConnectionStatus } = require('@discordjs/voice')
+const { joinVoiceChannel, getVoiceConnection, getVoiceConnections, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 const token = process.env.token;
 const GUILD_ID = process.env.guildid;
 const refDen = process.env.refden;
@@ -166,44 +166,31 @@ client.on('interactionCreate', async (interaction) => {
                     selfDeaf: false
                 });
 
+                vcConn.on(VoiceConnectionStatus.Disconnected, async () => {
+                    try {
+                        await Promise.race([
+                            entersState(vcConn, VoiceConnectionStatus.Signalling, 5_000),
+                            entersState(vcConn, VoiceConnectionStatus.Connecting, 5_000),
+                        ]);
+                    } catch {
+                        if (vcConn.state.status !== VoiceConnectionStatus.Destroyed) {
+                            vcConn.destroy();
+                        }
+                    }
+                });
+
                 vcConn.on(VoiceConnectionStatus.Ready, () => {
                     const spkMap = vcConn.receiver.speaking;
-
-                    const subscribeUser = (userId) => {
-                        if (!vcConn.receiver.subscriptions.has(userId)) {
-                            vcConn.receiver.subscribe(userId, { end: { behavior: 'manual' } });
-                        }
-                    };
-
-                    voiceChannel.members.forEach(member => {
-                        if (!member.user.bot) subscribeUser(member.id);
-                    });
-
                     spkMap.on('start', (userId) => {
-                        subscribeUser(userId);
-                        sendToWs({
-                            type: 'speaking_update',
-                            user_id: userId,
-                            is_speaking: true
-                        });
+                        sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: true });
                     });
-
                     spkMap.on('end', (userId) => {
-                        sendToWs({
-                            type: 'speaking_update',
-                            user_id: userId,
-                            is_speaking: false
-                        });
+                        sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: false });
                     });
                 });
 
-                await interaction.reply(
-                    { content: `✅ Joined voice channel: **${voiceChannel.name}**`, flags: 64 },
-
-                );
+                await interaction.reply({ content: `✅ Joined voice channel: **${voiceChannel.name}**`, flags: 64 });
                 console.log(`Joined voice channel: ${voiceChannel.name}`);
-
-
             } catch (error) {
                 console.error(error);
                 await interaction.reply({ content: '❌ Failed to join the voice channel.', flags: 64 });
@@ -212,7 +199,6 @@ client.on('interactionCreate', async (interaction) => {
             const connection = getVoiceConnection(interaction.guildId);
             if (connection) {
                 try {
-                    await interaction.guild.members.me.voice.disconnect();
                     connection.destroy();
                     vcMembers = [];
                     sendToWs({ type: 'members_update', members: [] });
