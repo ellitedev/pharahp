@@ -49,6 +49,22 @@ function generateClientId() {
     return 'client_' + Math.random().toString(36).substr(2, 9);
 }
 
+function attachSpeakingListeners(vcConn) {
+    const spkMap = vcConn.receiver.speaking;
+    spkMap.removeAllListeners('start');
+    spkMap.removeAllListeners('end');
+    spkMap.on('start', (userId) => {
+        vcConn.receiver.subscribe(userId, {
+            end: { behavior: EndBehaviorType.AfterSilence, duration: 100 }
+        });
+        sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: true });
+    });
+    spkMap.on('end', (userId) => {
+        sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: false });
+    });
+    console.log('[SPEAKING] Listening for speaking events.');
+}
+
 wss.on('connection', (ws) => {
     const clientId = generateClientId();
     ws._clientId = clientId;
@@ -154,18 +170,17 @@ client.on('interactionCreate', async (interaction) => {
                     adapterCreator: interaction.guild.voiceAdapterCreator,
                     selfDeaf: false
                 });
+
                 vcConn.on(VoiceConnectionStatus.Ready, () => {
-                    const spkMap = vcConn.receiver.speaking;
-                    spkMap.on('start', (userId) => {
-                        vcConn.receiver.subscribe(userId, {
-                            end: { behavior: EndBehaviorType.AfterSilence, duration: 100 }
-                        });
-                        sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: true });
-                    });
-                    spkMap.on('end', (userId) => {
-                        sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: false });
-                    });
+                    console.log('[SPEAKING] VoiceConnection Ready event fired.');
+                    attachSpeakingListeners(vcConn);
                 });
+
+                if (vcConn.state.status === VoiceConnectionStatus.Ready) {
+                    console.log('[SPEAKING] VoiceConnection was already Ready.');
+                    attachSpeakingListeners(vcConn);
+                }
+
                 await interaction.reply({ content: `✅ Joined voice channel: **${voiceChannel.name}**`, flags: 64 });
                 console.log(`Joined voice channel: ${voiceChannel.name}`);
             } catch (error) {
