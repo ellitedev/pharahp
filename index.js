@@ -176,7 +176,8 @@ client.on('interactionCreate', async (interaction) => {
                     channelId: voiceChannel.id,
                     guildId: interaction.guildId,
                     adapterCreator: interaction.guild.voiceAdapterCreator,
-                    selfDeaf: false
+                    selfDeaf: false,
+                    debug: true
                 });
 
                 console.log('[SPEAKING] Connection state on join:', vcConn.state.status);
