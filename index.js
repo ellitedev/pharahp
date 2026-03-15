@@ -1,6 +1,6 @@
 require('dotenv').config();
 const { Client, Events, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType } = require('discord.js');
-const { joinVoiceChannel, getVoiceConnection, getVoiceConnections, VoiceConnectionStatus } = require('@discordjs/voice');
+const { joinVoiceChannel, getVoiceConnection, getVoiceConnections, VoiceConnectionStatus, EndBehaviorType } = require('@discordjs/voice');
 const token = process.env.token;
 const GUILD_ID = process.env.guildid;
 const refDen = process.env.refden;
@@ -157,6 +157,9 @@ client.on('interactionCreate', async (interaction) => {
                 vcConn.on(VoiceConnectionStatus.Ready, () => {
                     const spkMap = vcConn.receiver.speaking;
                     spkMap.on('start', (userId) => {
+                        vcConn.receiver.subscribe(userId, {
+                            end: { behavior: EndBehaviorType.AfterSilence, duration: 100 }
+                        });
                         sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: true });
                     });
                     spkMap.on('end', (userId) => {
