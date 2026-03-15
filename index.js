@@ -152,12 +152,10 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isChatInputCommand()) {
         if (interaction.commandName === 'join') {
             const voiceChannel = interaction.options.getChannel('channel');
-
             if (voiceChannel.type !== ChannelType.GuildVoice) {
                 await interaction.reply({ content: '❌ Please select a voice channel.', ephemeral: true });
                 return;
             }
-
             try {
                 let vcConn = joinVoiceChannel({
                     channelId: voiceChannel.id,
@@ -165,20 +163,6 @@ client.on('interactionCreate', async (interaction) => {
                     adapterCreator: interaction.guild.voiceAdapterCreator,
                     selfDeaf: false
                 });
-
-                vcConn.on(VoiceConnectionStatus.Disconnected, async () => {
-                    try {
-                        await Promise.race([
-                            entersState(vcConn, VoiceConnectionStatus.Signalling, 5_000),
-                            entersState(vcConn, VoiceConnectionStatus.Connecting, 5_000),
-                        ]);
-                    } catch {
-                        if (vcConn.state.status !== VoiceConnectionStatus.Destroyed) {
-                            vcConn.destroy();
-                        }
-                    }
-                });
-
                 vcConn.on(VoiceConnectionStatus.Ready, () => {
                     const spkMap = vcConn.receiver.speaking;
                     spkMap.on('start', (userId) => {
@@ -188,7 +172,6 @@ client.on('interactionCreate', async (interaction) => {
                         sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: false });
                     });
                 });
-
                 await interaction.reply({ content: `✅ Joined voice channel: **${voiceChannel.name}**`, flags: 64 });
                 console.log(`Joined voice channel: ${voiceChannel.name}`);
             } catch (error) {
