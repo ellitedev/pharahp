@@ -181,9 +181,21 @@ client.on('interactionCreate', async (interaction) => {
 
                 console.log('[SPEAKING] Connection state on join:', vcConn.state.status);
 
+                vcConn.on(VoiceConnectionStatus.Signalling, () => {
+                    console.log('[SPEAKING] VoiceConnection Signalling...');
+                });
+                vcConn.on(VoiceConnectionStatus.Connecting, () => {
+                    console.log('[SPEAKING] VoiceConnection Connecting...');
+                });
                 vcConn.on(VoiceConnectionStatus.Ready, () => {
                     console.log('[SPEAKING] VoiceConnection Ready event fired.');
                     attachSpeakingListeners(vcConn);
+                });
+                vcConn.on(VoiceConnectionStatus.Disconnected, () => {
+                    console.log('[SPEAKING] VoiceConnection Disconnected!');
+                });
+                vcConn.on(VoiceConnectionStatus.Destroyed, () => {
+                    console.log('[SPEAKING] VoiceConnection Destroyed!');
                 });
 
                 if (vcConn.state.status === VoiceConnectionStatus.Ready) {
