@@ -37,4 +37,4 @@ jobs:
 
       - name: Trigger Portainer Stack redeploy
         run: |
-          curl -X POST https://portainer.ellite.dev/api/stacks/webhooks/3ccb41d8-15e7-46c0-897e-22658acdd3e9
+          curl -X POST https://portainer.ellite.dev/api/stacks/webhooks/28d30a53-bd61-4862-90bd-6ab62e48bba0
