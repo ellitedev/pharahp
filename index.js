@@ -1,6 +1,6 @@
-require('dotenv').config();
 const { Client, Events, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType } = require('discord.js');
 const { joinVoiceChannel, getVoiceConnection, getVoiceConnections, VoiceConnectionStatus, EndBehaviorType } = require('@discordjs/voice');
+const pjson = require('./package.json');
 
 console.log('[OPUS] Checking opus...');
 try {
@@ -161,6 +161,7 @@ function sendMembersUpdate(voiceChannel) {
 
 client.once(Events.ClientReady, readyClient => {
     console.log(`Ready! Logged in as ${readyClient.user.tag}`);
+    console.log('Running version:' + pjson.version);
 });
 
 client.on('interactionCreate', async (interaction) => {
