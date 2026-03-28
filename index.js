@@ -199,6 +199,12 @@ client.on('interactionCreate', async (interaction) => {
                 vcConn.on(VoiceConnectionStatus.Destroyed, () => {
                     console.log('[SPEAKING] VoiceConnection Destroyed!');
                 });
+                vcConn.on('error', (error) => {
+                    console.error('[SPEAKING] VoiceConnection error:', error);
+                    vcConn.destroy();
+                    vcMembers = [];
+                    sendToWs({ type: 'members_update', members: [] });
+                });
 
                 if (vcConn.state.status === VoiceConnectionStatus.Ready) {
                     console.log('[SPEAKING] VoiceConnection was already Ready.');
