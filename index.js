@@ -48,13 +48,13 @@ function sendToWs(data) {
         }
     });
     if (!sent) {
-        console.error('No WebSocket clients to send to.');
+        console.log('No WebSocket clients to send to.');
     }
     return sent;
 }
 
 function generateClientId() {
-    return 'client_' + Math.random().toString(36).substr(2, 9);
+    return 'client_' + Math.random().toString(36).substring(2, 11);
 }
 
 function attachSpeakingListeners(vcConn) {
@@ -162,6 +162,7 @@ function sendMembersUpdate(voiceChannel) {
 client.once(Events.ClientReady, readyClient => {
     console.log(`Ready! Logged in as ${readyClient.user.tag}`);
     console.log('Running version:' + pjson.version);
+    registerCommands();
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -173,15 +174,27 @@ client.on('interactionCreate', async (interaction) => {
                 return;
             }
             try {
+                const existingConn = getVoiceConnection(interaction.guildId);
+                if (existingConn && existingConn.joinConfig.channelId === voiceChannel.id) {
+                    await interaction.reply({ content: `Already in **${voiceChannel.name}**.`, flags: 64 });
+                    return;
+                }
+
                 let vcConn = joinVoiceChannel({
                     channelId: voiceChannel.id,
                     guildId: interaction.guildId,
                     adapterCreator: interaction.guild.voiceAdapterCreator,
                     selfDeaf: false,
-                    debug: true
                 });
 
                 console.log('[SPEAKING] Connection state on join:', vcConn.state.status);
+
+                vcConn.removeAllListeners(VoiceConnectionStatus.Signalling);
+                vcConn.removeAllListeners(VoiceConnectionStatus.Connecting);
+                vcConn.removeAllListeners(VoiceConnectionStatus.Ready);
+                vcConn.removeAllListeners(VoiceConnectionStatus.Disconnected);
+                vcConn.removeAllListeners(VoiceConnectionStatus.Destroyed);
+                vcConn.removeAllListeners('error');
 
                 vcConn.on(VoiceConnectionStatus.Signalling, () => {
                     console.log('[SPEAKING] VoiceConnection Signalling...');
@@ -295,6 +308,7 @@ client.on('messageCreate', message => {
 });
 
 client.on('messageUpdate', (oldMessage, newMessage) => {
+    if (newMessage.partial) return;
     if (newMessage.channelId === refDen) {
         const updMsg = {
             command: 'message-updated',
@@ -312,6 +326,7 @@ client.on('messageUpdate', (oldMessage, newMessage) => {
 });
 
 client.on('messageDelete', message => {
+    if (message.partial) return;
     if (message.channelId === refDen) {
         const delMsg = {
             command: 'message-deleted',
@@ -351,7 +366,6 @@ async function registerCommands() {
 }
 
 client.login(token)
-    .then(() => registerCommands())
     .catch(console.error);
 
 process.on('SIGINT', function () {
