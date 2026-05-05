@@ -1,5 +1,5 @@
 const { Client, Events, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType } = require('discord.js');
-const { joinVoiceChannel, getVoiceConnection, getVoiceConnections, VoiceConnectionStatus, EndBehaviorType } = require('@discordjs/voice');
+const { joinVoiceChannel, getVoiceConnection, getVoiceConnections, VoiceConnectionStatus } = require('@discordjs/voice');
 const pjson = require('./package.json');
 const fs = require('fs');
 const path = require('path');
@@ -84,9 +84,6 @@ function attachSpeakingListeners(vcConn) {
     spkMap.removeAllListeners('start');
     spkMap.removeAllListeners('end');
     spkMap.on('start', (userId) => {
-        vcConn.receiver.subscribe(userId, {
-            end: { behavior: EndBehaviorType.AfterSilence, duration: 100 }
-        });
         sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: true });
     });
     spkMap.on('end', (userId) => {
