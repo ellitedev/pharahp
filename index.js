@@ -147,6 +147,7 @@ function sendMembersUpdate(voiceChannel) {
             id: member.id,
             username: member.user.username,
             display_name: member.displayName,
+            avatar: member.user.displayAvatarURL({ size: 128, extension: 'png' }),
         }));
 
     vcMembers = members;
