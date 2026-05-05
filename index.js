@@ -79,29 +79,50 @@ function generateClientId() {
     return 'client_' + Math.random().toString(36).substring(2, 11);
 }
 
-const SPEAKING_SILENCE_HOLD_MS = 400;
-const speakingTimers = new Map();
+const SPEAKING_HOLD_MS = 400;     // silence required after a real end before emitting false
+const SPEAKING_GHOST_BURST_MS = 200; // bursts shorter than this during the hold period are treated as ghosts
+const speakingState = new Map();
+
+function getSpeakingState(userId) {
+    let s = speakingState.get(userId);
+    if (!s) {
+        s = { isPublic: false, finalizeTimer: null, currentStartAt: 0 };
+        speakingState.set(userId, s);
+    }
+    return s;
+}
 
 function attachSpeakingListeners(vcConn) {
     const spkMap = vcConn.receiver.speaking;
     spkMap.removeAllListeners('start');
     spkMap.removeAllListeners('end');
     spkMap.on('start', (userId) => {
-        const pending = speakingTimers.get(userId);
-        if (pending) {
-            clearTimeout(pending);
-            speakingTimers.delete(userId);
+        const s = getSpeakingState(userId);
+        s.currentStartAt = Date.now();
+        if (s.finalizeTimer) {
+            // already in silence-hold; let the matching end decide if this burst is real
             return;
         }
-        sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: true });
+        if (!s.isPublic) {
+            s.isPublic = true;
+            sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: true });
+        }
     });
     spkMap.on('end', (userId) => {
-        const pending = speakingTimers.get(userId);
-        if (pending) clearTimeout(pending);
-        speakingTimers.set(userId, setTimeout(() => {
-            speakingTimers.delete(userId);
-            sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: false });
-        }, SPEAKING_SILENCE_HOLD_MS));
+        const s = getSpeakingState(userId);
+        const burst = Date.now() - s.currentStartAt;
+        if (s.finalizeTimer && burst < SPEAKING_GHOST_BURST_MS) {
+            // ghost-shaped burst during hold; let existing finalize timer keep running
+            return;
+        }
+        if (s.finalizeTimer) clearTimeout(s.finalizeTimer);
+        s.finalizeTimer = setTimeout(() => {
+            s.finalizeTimer = null;
+            if (s.isPublic) {
+                s.isPublic = false;
+                sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: false });
+            }
+        }, SPEAKING_HOLD_MS);
     });
     console.log('[SPEAKING] Listening for speaking events.');
 }
