@@ -203,6 +203,9 @@ client.on('interactionCreate', async (interaction) => {
                     return;
                 }
 
+                // Defer reply first since we're going to wait
+                await interaction.deferReply({ flags: 64 });
+
                 let vcConn = joinVoiceChannel({
                     channelId: voiceChannel.id,
                     guildId: interaction.guildId,
@@ -242,18 +245,44 @@ client.on('interactionCreate', async (interaction) => {
                     sendToWs({ type: 'members_update', members: [] });
                 });
 
-                if (vcConn.state.status === VoiceConnectionStatus.Ready) {
-                    console.log('[SPEAKING] VoiceConnection was already Ready.');
-                    attachSpeakingListeners(vcConn);
-                }
+                // Wait for the connection to be ready
+                await new Promise((resolve, reject) => {
+                    const timeout = setTimeout(() => {
+                        reject(new Error('Voice connection timed out'));
+                    }, 10000);
 
-                await interaction.reply({ content: `✅ Joined voice channel: **${voiceChannel.name}**`, flags: 64 });
+                    vcConn.once(VoiceConnectionStatus.Ready, () => {
+                        clearTimeout(timeout);
+                        resolve();
+                    });
+
+                    vcConn.once('error', (error) => {
+                        clearTimeout(timeout);
+                        reject(error);
+                    });
+
+                    // If it's already ready, resolve immediately
+                    if (vcConn.state.status === VoiceConnectionStatus.Ready) {
+                        clearTimeout(timeout);
+                        resolve();
+                    }
+                });
+
+                await interaction.editReply(`✅ Joined voice channel: **${voiceChannel.name}**`);
                 console.log(`Joined voice channel: ${voiceChannel.name}`);
+
+                // Send initial members update
+                sendMembersUpdate(voiceChannel);
             } catch (error) {
                 console.error(error);
-                await interaction.reply({ content: '❌ Failed to join the voice channel.', flags: 64 });
+                if (interaction.deferred) {
+                    await interaction.editReply('❌ Failed to join the voice channel.');
+                } else {
+                    await interaction.reply({ content: '❌ Failed to join the voice channel.', flags: 64 });
+                }
             }
         } else if (interaction.commandName === 'disconnect') {
+            // ... rest stays the same
             const connection = getVoiceConnection(interaction.guildId);
             if (connection) {
                 try {
