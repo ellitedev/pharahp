@@ -1,6 +1,8 @@
 const { Client, Events, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType } = require('discord.js');
 const { joinVoiceChannel, getVoiceConnection, getVoiceConnections, VoiceConnectionStatus, EndBehaviorType } = require('@discordjs/voice');
 const pjson = require('./package.json');
+const fs = require('fs');
+const path = require('path');
 
 console.log('[OPUS] Checking opus...');
 try {
@@ -10,8 +12,28 @@ try {
     console.error('[OPUS] opusscript failed to load:', e.message);
 }
 const token = process.env.token;
-const GUILD_ID = process.env.guildid;
-const refDen = process.env.refden;
+
+const CONFIG_FILE = path.join(__dirname, 'guild_config.json');
+
+// Load existing config
+let guildConfig = {};
+try {
+    if (fs.existsSync(CONFIG_FILE)) {
+        guildConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+        console.log('[CONFIG] Loaded guild configuration from file.');
+    }
+} catch (e) {
+    console.error('[CONFIG] Error loading guild config:', e.message);
+}
+
+function saveConfig() {
+    try {
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(guildConfig, null, 2));
+        console.log('[CONFIG] Saved guild configuration to file.');
+    } catch (e) {
+        console.error('[CONFIG] Error saving guild config:', e.message);
+    }
+}
 
 const client = new Client({
     intents: [
@@ -247,6 +269,31 @@ client.on('interactionCreate', async (interaction) => {
             } else {
                 await interaction.reply({ content: '❌ Not currently connected to a voice channel.', flags: 64 });
             }
+        } else if (interaction.commandName === 'setchannel') {
+            const channel = interaction.options.getChannel('channel');
+            if (channel.type !== ChannelType.GuildText) {
+                await interaction.reply({ content: '❌ Please select a text channel.', ephemeral: true });
+                return;
+            }
+            if (!guildConfig[interaction.guildId]) {
+                guildConfig[interaction.guildId] = {};
+            }
+            guildConfig[interaction.guildId].refChannel = channel.id;
+            saveConfig();
+            await interaction.reply({ content: `✅ Now monitoring **#${channel.name}** for messages.`, flags: 64 });
+            console.log(`[CONFIG] Set monitored channel to #${channel.name} (${channel.id}) in guild ${interaction.guild.name}`);
+        } else if (interaction.commandName === 'clearchannel') {
+            if (guildConfig[interaction.guildId]) {
+                delete guildConfig[interaction.guildId].refChannel;
+                if (Object.keys(guildConfig[interaction.guildId]).length === 0) {
+                    delete guildConfig[interaction.guildId];
+                }
+                saveConfig();
+                await interaction.reply({ content: '✅ Stopped monitoring messages in this server.', flags: 64 });
+                console.log(`[CONFIG] Cleared monitored channel in guild ${interaction.guild.name}`);
+            } else {
+                await interaction.reply({ content: '❌ No channel was being monitored in this server.', flags: 64 });
+            }
         }
     }
 });
@@ -288,7 +335,11 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
 });
 
 client.on('messageCreate', message => {
-    if (message.channelId === refDen) {
+    if (!message.guildId) return;
+    const guildRefChannel = guildConfig[message.guildId]?.refChannel;
+    if (!guildRefChannel) return;
+
+    if (message.channelId === guildRefChannel) {
         const content = message.content;
 
         const newMsg = {
@@ -310,7 +361,11 @@ client.on('messageCreate', message => {
 
 client.on('messageUpdate', (oldMessage, newMessage) => {
     if (newMessage.partial) return;
-    if (newMessage.channelId === refDen) {
+    if (!newMessage.guildId) return;
+    const guildRefChannel = guildConfig[newMessage.guildId]?.refChannel;
+    if (!guildRefChannel) return;
+
+    if (newMessage.channelId === guildRefChannel) {
         const updMsg = {
             command: 'message-updated',
             data: {
@@ -328,7 +383,11 @@ client.on('messageUpdate', (oldMessage, newMessage) => {
 
 client.on('messageDelete', message => {
     if (message.partial) return;
-    if (message.channelId === refDen) {
+    if (!message.guildId) return;
+    const guildRefChannel = guildConfig[message.guildId]?.refChannel;
+    if (!guildRefChannel) return;
+
+    if (message.channelId === guildRefChannel) {
         const delMsg = {
             command: 'message-deleted',
             data: {
@@ -343,7 +402,7 @@ client.on('messageDelete', message => {
 
 async function registerCommands() {
     try {
-        await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), {
+        await rest.put(Routes.applicationCommands(client.user.id), {
             body: [
                 new SlashCommandBuilder()
                     .setName('join')
@@ -358,9 +417,22 @@ async function registerCommands() {
                     .setName('disconnect')
                     .setDescription('Disconnect from current voice channel')
                     .toJSON(),
+                new SlashCommandBuilder()
+                    .setName('setchannel')
+                    .setDescription('Set the text channel to monitor for messages')
+                    .addChannelOption(option =>
+                        option.setName('channel')
+                            .setDescription('The text channel to monitor')
+                            .setRequired(true)
+                            .addChannelTypes(ChannelType.GuildText)
+                    ).toJSON(),
+                new SlashCommandBuilder()
+                    .setName('clearchannel')
+                    .setDescription('Stop monitoring messages in this server')
+                    .toJSON(),
             ],
         });
-        console.log('Successfully registered application commands.');
+        console.log('Successfully registered global application commands.');
     } catch (err) {
         console.error('Error registering commands:', err);
     }
