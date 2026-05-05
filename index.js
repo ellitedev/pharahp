@@ -79,29 +79,15 @@ function generateClientId() {
     return 'client_' + Math.random().toString(36).substring(2, 11);
 }
 
-const SPEAKING_SILENCE_HOLD_MS = 400;
-const speakingTimers = new Map();
-
 function attachSpeakingListeners(vcConn) {
     const spkMap = vcConn.receiver.speaking;
     spkMap.removeAllListeners('start');
     spkMap.removeAllListeners('end');
     spkMap.on('start', (userId) => {
-        const pending = speakingTimers.get(userId);
-        if (pending) {
-            clearTimeout(pending);
-            speakingTimers.delete(userId);
-            return;
-        }
         sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: true });
     });
     spkMap.on('end', (userId) => {
-        const pending = speakingTimers.get(userId);
-        if (pending) clearTimeout(pending);
-        speakingTimers.set(userId, setTimeout(() => {
-            speakingTimers.delete(userId);
-            sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: false });
-        }, SPEAKING_SILENCE_HOLD_MS));
+        sendToWs({ type: 'speaking_update', user_id: userId, is_speaking: false });
     });
     console.log('[SPEAKING] Listening for speaking events.');
 }
