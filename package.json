@@ -1,6 +1,6 @@
 {
   "name": "pharahp",
-  "version": "24",
+  "version": "25",
   "description": "",
   "license": "ISC",
   "author": "",
@@ -11,12 +11,12 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "@discordjs/rest": "^2.5.1",
-    "@discordjs/voice": "^0.19.1",
-    "@snazzah/davey": "^0.1.6",
-    "discord.js": "^14.21.0",
-    "libsodium-wrappers": "^0.7.15",
+    "@discordjs/rest": "^2.6.1",
+    "@discordjs/voice": "^0.19.2",
+    "@snazzah/davey": "^0.1.11",
+    "discord.js": "^14.26.4",
+    "libsodium-wrappers": "^0.8.4",
     "node-fetch": "^3.3.2",
-    "opusscript": "^0.0.8"
+    "opusscript": "^0.1.1"
   }
 }
