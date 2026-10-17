@@ -13,7 +13,14 @@ try {
 }
 const token = process.env.token;
 
-const CONFIG_FILE = path.join(__dirname, 'guild_config.json');
+// The panel passes a writable data dir, its install folder may be read only
+const dataDir = process.env.datadir || __dirname;
+try {
+    fs.mkdirSync(dataDir, { recursive: true });
+} catch (e) {
+    console.error('[CONFIG] Error creating data dir:', e.message);
+}
+const CONFIG_FILE = path.join(dataDir, 'guild_config.json');
 
 // Load existing config
 let guildConfig = {};
@@ -48,7 +55,8 @@ const rest = new REST({ version: '10' }).setToken(token);
 
 const WebSocket = require('ws');
 const wsport = process.env.wssport;
-const wss = new WebSocket.Server({ port: wsport });
+// Unset = all interfaces (docker), the panel only listens on 127.0.0.1
+const wss = new WebSocket.Server({ port: wsport, host: process.env.wsshost || undefined });
 let wsClients = new Set();
 
 function sendToWs(data) {
@@ -124,6 +132,20 @@ wss.on('connection', (ws) => {
         }
     }
 
+    ws.on('message', (raw) => {
+        let msg;
+        try {
+            msg = JSON.parse(raw.toString());
+        } catch (e) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }));
+            return;
+        }
+        handleWsCommand(ws, msg).catch(err => {
+            console.error('[WS] Command error:', err.message);
+            ws.send(JSON.stringify({ type: `${msg.type}_result`, request_id: msg.request_id, success: false, error: err.message }));
+        });
+    });
+
     ws.on('close', () => {
         console.log(`WebSocket client disconnected: ${ws._clientId}`);
         wsClients.delete(ws);
@@ -186,6 +208,20 @@ client.once(Events.ClientReady, readyClient => {
     console.log(`Ready! Logged in as ${readyClient.user.tag}`);
     console.log('Running version:' + pjson.version);
     registerCommands();
+
+    // Clients that connected before login finished only got an empty bot_ready
+    sendToWs({ type: 'bot_ready', username: readyClient.user.tag });
+    sendToWs({ type: 'channel_monitored', success: true });
+
+    // Set by the panel, voice channel id to join right away
+    if (process.env.autojoin) {
+        readyClient.channels.fetch(process.env.autojoin)
+            .then(channel => {
+                if (!channel || channel.type !== ChannelType.GuildVoice) throw new Error('Voice channel not found');
+                return joinChannel(channel);
+            })
+            .catch(err => console.error('[AUTOJOIN] Failed to join:', err.message));
+    }
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -196,105 +232,25 @@ client.on('interactionCreate', async (interaction) => {
                 await interaction.reply({ content: '❌ Please select a voice channel.', ephemeral: true });
                 return;
             }
+            const existingConn = getVoiceConnection(interaction.guildId);
+            if (existingConn && existingConn.joinConfig.channelId === voiceChannel.id) {
+                await interaction.reply({ content: `Already in **${voiceChannel.name}**.`, flags: 64 });
+                return;
+            }
+
+            // Defer reply first since we're going to wait
+            await interaction.deferReply({ flags: 64 });
             try {
-                const existingConn = getVoiceConnection(interaction.guildId);
-                if (existingConn && existingConn.joinConfig.channelId === voiceChannel.id) {
-                    await interaction.reply({ content: `Already in **${voiceChannel.name}**.`, flags: 64 });
-                    return;
-                }
-
-                // Defer reply first since we're going to wait
-                await interaction.deferReply({ flags: 64 });
-
-                let vcConn = joinVoiceChannel({
-                    channelId: voiceChannel.id,
-                    guildId: interaction.guildId,
-                    adapterCreator: interaction.guild.voiceAdapterCreator,
-                    selfDeaf: false,
-                });
-
-                console.log('[SPEAKING] Connection state on join:', vcConn.state.status);
-
-                vcConn.removeAllListeners(VoiceConnectionStatus.Signalling);
-                vcConn.removeAllListeners(VoiceConnectionStatus.Connecting);
-                vcConn.removeAllListeners(VoiceConnectionStatus.Ready);
-                vcConn.removeAllListeners(VoiceConnectionStatus.Disconnected);
-                vcConn.removeAllListeners(VoiceConnectionStatus.Destroyed);
-                vcConn.removeAllListeners('error');
-
-                vcConn.on(VoiceConnectionStatus.Signalling, () => {
-                    console.log('[SPEAKING] VoiceConnection Signalling...');
-                });
-                vcConn.on(VoiceConnectionStatus.Connecting, () => {
-                    console.log('[SPEAKING] VoiceConnection Connecting...');
-                });
-                vcConn.on(VoiceConnectionStatus.Ready, () => {
-                    console.log('[SPEAKING] VoiceConnection Ready event fired.');
-                    attachSpeakingListeners(vcConn);
-                });
-                vcConn.on(VoiceConnectionStatus.Disconnected, () => {
-                    console.log('[SPEAKING] VoiceConnection Disconnected!');
-                });
-                vcConn.on(VoiceConnectionStatus.Destroyed, () => {
-                    console.log('[SPEAKING] VoiceConnection Destroyed!');
-                });
-                vcConn.on('error', (error) => {
-                    console.error('[SPEAKING] VoiceConnection error:', error);
-                    vcConn.destroy();
-                    vcMembers = [];
-                    sendToWs({ type: 'members_update', members: [] });
-                });
-
-                // Wait for the connection to be ready
-                await new Promise((resolve, reject) => {
-                    const timeout = setTimeout(() => {
-                        reject(new Error('Voice connection timed out'));
-                    }, 10000);
-
-                    vcConn.once(VoiceConnectionStatus.Ready, () => {
-                        clearTimeout(timeout);
-                        resolve();
-                    });
-
-                    vcConn.once('error', (error) => {
-                        clearTimeout(timeout);
-                        reject(error);
-                    });
-
-                    // If it's already ready, resolve immediately
-                    if (vcConn.state.status === VoiceConnectionStatus.Ready) {
-                        clearTimeout(timeout);
-                        resolve();
-                    }
-                });
-
+                await joinChannel(voiceChannel);
                 await interaction.editReply(`✅ Joined voice channel: **${voiceChannel.name}**`);
-                console.log(`Joined voice channel: ${voiceChannel.name}`);
-
-                // Send initial members update
-                sendMembersUpdate(voiceChannel);
             } catch (error) {
                 console.error(error);
-                if (interaction.deferred) {
-                    await interaction.editReply('❌ Failed to join the voice channel.');
-                } else {
-                    await interaction.reply({ content: '❌ Failed to join the voice channel.', flags: 64 });
-                }
+                await interaction.editReply('❌ Failed to join the voice channel.');
             }
         } else if (interaction.commandName === 'disconnect') {
-            // ... rest stays the same
-            const connection = getVoiceConnection(interaction.guildId);
-            if (connection) {
-                try {
-                    connection.destroy();
-                    vcMembers = [];
-                    sendToWs({ type: 'members_update', members: [] });
-                    await interaction.reply({ content: '✅ Disconnected from voice channel.', flags: 64 });
-                    console.log(`Disconnected from voice channel in guild: ${interaction.guild.name}`);
-                } catch (error) {
-                    console.error(error);
-                    await interaction.reply({ content: '❌ Failed to disconnect from voice channel.', flags: 64 });
-                }
+            if (leaveChannel(interaction.guildId)) {
+                await interaction.reply({ content: '✅ Disconnected from voice channel.', flags: 64 });
+                console.log(`Disconnected from voice channel in guild: ${interaction.guild.name}`);
             } else {
                 await interaction.reply({ content: '❌ Not currently connected to a voice channel.', flags: 64 });
             }
@@ -304,20 +260,12 @@ client.on('interactionCreate', async (interaction) => {
                 await interaction.reply({ content: '❌ Please select a text channel.', ephemeral: true });
                 return;
             }
-            if (!guildConfig[interaction.guildId]) {
-                guildConfig[interaction.guildId] = {};
-            }
-            guildConfig[interaction.guildId].refChannel = channel.id;
-            saveConfig();
+            setRefChannel(interaction.guildId, channel.id);
             await interaction.reply({ content: `✅ Now monitoring **#${channel.name}** for messages.`, flags: 64 });
             console.log(`[CONFIG] Set monitored channel to #${channel.name} (${channel.id}) in guild ${interaction.guild.name}`);
         } else if (interaction.commandName === 'clearchannel') {
-            if (guildConfig[interaction.guildId]) {
-                delete guildConfig[interaction.guildId].refChannel;
-                if (Object.keys(guildConfig[interaction.guildId]).length === 0) {
-                    delete guildConfig[interaction.guildId];
-                }
-                saveConfig();
+            if (guildConfig[interaction.guildId]?.refChannel) {
+                setRefChannel(interaction.guildId, null);
                 await interaction.reply({ content: '✅ Stopped monitoring messages in this server.', flags: 64 });
                 console.log(`[CONFIG] Cleared monitored channel in guild ${interaction.guild.name}`);
             } else {
@@ -429,6 +377,191 @@ client.on('messageDelete', message => {
     }
 });
 
+async function joinChannel(voiceChannel) {
+    const guildId = voiceChannel.guild.id;
+    const existingConn = getVoiceConnection(guildId);
+    if (existingConn && existingConn.joinConfig.channelId === voiceChannel.id) {
+        sendMembersUpdate(voiceChannel);
+        return;
+    }
+
+    let vcConn = joinVoiceChannel({
+        channelId: voiceChannel.id,
+        guildId: guildId,
+        adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+        selfDeaf: false,
+    });
+
+    console.log('[SPEAKING] Connection state on join:', vcConn.state.status);
+
+    vcConn.removeAllListeners(VoiceConnectionStatus.Signalling);
+    vcConn.removeAllListeners(VoiceConnectionStatus.Connecting);
+    vcConn.removeAllListeners(VoiceConnectionStatus.Ready);
+    vcConn.removeAllListeners(VoiceConnectionStatus.Disconnected);
+    vcConn.removeAllListeners(VoiceConnectionStatus.Destroyed);
+    vcConn.removeAllListeners('error');
+
+    vcConn.on(VoiceConnectionStatus.Signalling, () => {
+        console.log('[SPEAKING] VoiceConnection Signalling...');
+    });
+    vcConn.on(VoiceConnectionStatus.Connecting, () => {
+        console.log('[SPEAKING] VoiceConnection Connecting...');
+    });
+    vcConn.on(VoiceConnectionStatus.Ready, () => {
+        console.log('[SPEAKING] VoiceConnection Ready event fired.');
+        attachSpeakingListeners(vcConn);
+    });
+    vcConn.on(VoiceConnectionStatus.Disconnected, () => {
+        console.log('[SPEAKING] VoiceConnection Disconnected!');
+    });
+    vcConn.on(VoiceConnectionStatus.Destroyed, () => {
+        console.log('[SPEAKING] VoiceConnection Destroyed!');
+    });
+    vcConn.on('error', (error) => {
+        console.error('[SPEAKING] VoiceConnection error:', error);
+        vcConn.destroy();
+        vcMembers = [];
+        sendToWs({ type: 'members_update', members: [] });
+    });
+
+    // Wait for the connection to be ready
+    await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            reject(new Error('Voice connection timed out'));
+        }, 10000);
+
+        vcConn.once(VoiceConnectionStatus.Ready, () => {
+            clearTimeout(timeout);
+            resolve();
+        });
+
+        vcConn.once('error', (error) => {
+            clearTimeout(timeout);
+            reject(error);
+        });
+
+        // If it's already ready, resolve immediately
+        if (vcConn.state.status === VoiceConnectionStatus.Ready) {
+            clearTimeout(timeout);
+            resolve();
+        }
+    });
+
+    console.log(`Joined voice channel: ${voiceChannel.name}`);
+
+    // Send initial members update
+    sendMembersUpdate(voiceChannel);
+}
+
+function leaveChannel(guildId) {
+    const connection = getVoiceConnection(guildId);
+    if (!connection) return false;
+
+    connection.destroy();
+    vcMembers = [];
+    sendToWs({ type: 'members_update', members: [] });
+    return true;
+}
+
+function setRefChannel(guildId, channelId) {
+    if (channelId) {
+        if (!guildConfig[guildId]) {
+            guildConfig[guildId] = {};
+        }
+        guildConfig[guildId].refChannel = channelId;
+    } else if (guildConfig[guildId]) {
+        delete guildConfig[guildId].refChannel;
+        if (Object.keys(guildConfig[guildId]).length === 0) {
+            delete guildConfig[guildId];
+        }
+    }
+    saveConfig();
+}
+
+function getStatus() {
+    const voice = [];
+    getVoiceConnections().forEach(connection => {
+        voice.push({ guild_id: connection.joinConfig.guildId, channel_id: connection.joinConfig.channelId });
+    });
+    return {
+        ready: client.isReady(),
+        username: client.user ? client.user.tag : null,
+        voice,
+        ref_channels: Object.fromEntries(
+            Object.entries(guildConfig).map(([guildId, config]) => [guildId, config.refChannel || null])
+        ),
+    };
+}
+
+// Commands need this key, without one the websocket stays read only (hosted bot)
+const wssKey = process.env.wsskey;
+
+// Commands from websocket clients (the panel), answered with `<type>_result`
+async function handleWsCommand(ws, msg) {
+    const reply = (data) => ws.send(JSON.stringify({ type: `${msg.type}_result`, request_id: msg.request_id, success: true, ...data }));
+
+    // VoiceBotService sends these on connect, the bot only ever watches the channel it's in
+    if (msg.type === 'monitor_channel' || msg.type === 'stop_monitoring') return;
+
+    if (!wssKey || msg.key !== wssKey) throw new Error('Not allowed');
+
+    switch (msg.type) {
+        case 'status':
+            reply(getStatus());
+            break;
+
+        case 'list_channels': {
+            if (!client.isReady()) throw new Error('Bot is not logged in');
+            const guilds = client.guilds.cache.map(guild => ({
+                id: guild.id,
+                name: guild.name,
+                voice: guild.channels.cache
+                    .filter(channel => channel.type === ChannelType.GuildVoice)
+                    .sort((a, b) => a.rawPosition - b.rawPosition)
+                    .map(channel => ({ id: channel.id, name: channel.name })),
+                text: guild.channels.cache
+                    .filter(channel => channel.type === ChannelType.GuildText)
+                    .sort((a, b) => a.rawPosition - b.rawPosition)
+                    .map(channel => ({ id: channel.id, name: channel.name })),
+            }));
+            reply({ guilds });
+            break;
+        }
+
+        case 'join': {
+            if (!client.isReady()) throw new Error('Bot is not logged in');
+            const channel = await client.channels.fetch(msg.channel_id).catch(() => null);
+            if (!channel || channel.type !== ChannelType.GuildVoice) throw new Error('Voice channel not found');
+            await joinChannel(channel);
+            reply(getStatus());
+            break;
+        }
+
+        case 'leave':
+            if (msg.guild_id) {
+                leaveChannel(msg.guild_id);
+            } else {
+                getVoiceConnections().forEach(connection => leaveChannel(connection.joinConfig.guildId));
+            }
+            reply(getStatus());
+            break;
+
+        case 'set_ref_channel':
+            if (!msg.guild_id) throw new Error('Missing guild_id');
+            setRefChannel(msg.guild_id, msg.channel_id || null);
+            reply(getStatus());
+            break;
+
+        case 'shutdown':
+            reply({});
+            shutdown();
+            break;
+
+        default:
+            throw new Error(`Unknown command: ${msg.type}`);
+    }
+}
+
 async function registerCommands() {
     try {
         await rest.put(Routes.applicationCommands(client.user.id), {
@@ -468,13 +601,36 @@ async function registerCommands() {
 }
 
 client.login(token)
-    .catch(console.error);
+    .catch(err => {
+        // Missing privileged intents (Server Members, Message Content) ends up here too
+        console.error('[LOGIN] Failed to log in:', err.message);
+        sendToWs({ type: 'error', message: `Login failed: ${err.message}` });
+        // Nothing works without a login, let the panel show it as crashed
+        if (process.env.parentwatch) {
+            wss.close();
+            setTimeout(() => process.exit(1), 500);
+        }
+    });
 
-process.on('SIGINT', function () {
+let shuttingDown = false;
+function shutdown() {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log("Exiting PharahP - closing active connections.");
     const connections = getVoiceConnections();
     connections.forEach(connection => connection.destroy());
     wss.close();
     client.destroy();
-    process.exit();
-});
+    // Give the voice disconnect a moment to reach discord
+    setTimeout(() => process.exit(), 500);
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
+// Started by the panel: stdin closes when the panel goes away, even when it crashed
+if (process.env.parentwatch) {
+    process.stdin.on('end', shutdown);
+    process.stdin.on('error', shutdown);
+    process.stdin.resume();
+}

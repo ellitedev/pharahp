@@ -17,6 +17,7 @@
     "discord.js": "^14.21.0",
     "libsodium-wrappers": "^0.7.15",
     "node-fetch": "^3.3.2",
-    "opusscript": "^0.0.8"
+    "opusscript": "^0.0.8",
+    "ws": "^8.22.0"
   }
 }
