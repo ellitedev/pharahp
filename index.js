@@ -1,4 +1,4 @@
-const { Client, Events, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType } = require('discord.js');
+const { Client, Events, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType, EmbedBuilder } = require('discord.js');
 const { joinVoiceChannel, getVoiceConnection, getVoiceConnections, VoiceConnectionStatus, EndBehaviorType } = require('@discordjs/voice');
 const pjson = require('./package.json');
 const fs = require('fs');
@@ -312,7 +312,8 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
 });
 
 client.on('messageCreate', message => {
-    if (!message.guildId) return;
+    // Posted results are embeds without text, they'd show up empty in the ref den
+    if (!message.guildId || message.author.id === client.user?.id) return;
     const guildRefChannel = guildConfig[message.guildId]?.refChannel;
     if (!guildRefChannel) return;
 
@@ -338,7 +339,7 @@ client.on('messageCreate', message => {
 
 client.on('messageUpdate', (oldMessage, newMessage) => {
     if (newMessage.partial) return;
-    if (!newMessage.guildId) return;
+    if (!newMessage.guildId || newMessage.author?.id === client.user?.id) return;
     const guildRefChannel = guildConfig[newMessage.guildId]?.refChannel;
     if (!guildRefChannel) return;
 
@@ -360,7 +361,7 @@ client.on('messageUpdate', (oldMessage, newMessage) => {
 
 client.on('messageDelete', message => {
     if (message.partial) return;
-    if (!message.guildId) return;
+    if (!message.guildId || message.author?.id === client.user?.id) return;
     const guildRefChannel = guildConfig[message.guildId]?.refChannel;
     if (!guildRefChannel) return;
 
@@ -478,6 +479,67 @@ function setRefChannel(guildId, channelId) {
     saveConfig();
 }
 
+const fullComboLabels = { okay: 'FC (Okay)', good: 'FC (Good)', great: 'FC (Great)', perfect: 'FC (Perfect)', perfectPlus: 'FC (Perfect+)' };
+// Plain judgement counts are the late hits only, the totals add the early ones
+const judgementTotal = (entry, key) => (entry.judgements?.[key] || 0) + (entry.judgements?.[`early${key[0].toUpperCase()}${key.slice(1)}`] || 0);
+
+// One set's results from the panel, laid out like the results screen
+function resultsEmbed(results) {
+    const sides = ['player1', 'player2'].map(key => results[key] || {});
+    const winnerKey = results.outcome === 'player1' || results.outcome === 'player2' ? results.outcome : null;
+
+    const field = (side, key) => {
+        const entry = side.entry;
+        const name = `${key === winnerKey ? 'WINNER · ' : ''}${side.name || 'Unknown'}`;
+        if (!entry) return { name, value: 'Did not finish', inline: true };
+
+        const tags = [`${entry.difficulty} ${entry.difficultyRating}`, `${entry.maxCombo}x combo`];
+        if (fullComboLabels[entry.fullCombo]) tags.push(fullComboLabels[entry.fullCombo]);
+        if (entry.failed) tags.push('Failed');
+        if (entry.forfeited) tags.push('Forfeited');
+        if (entry.attempts > 1) tags.push(`best of ${entry.attempts}`);
+
+        const judgements = [['perfectPlus', 'P+'], ['perfect', 'P'], ['great', 'Gr'], ['good', 'Gd'], ['okay', 'Ok']]
+            .map(([judgement, label]) => `${label} ${judgementTotal(entry, judgement)}`)
+            .join(' · ') + ` · Miss ${entry.judgements?.failed || 0}`;
+
+        return {
+            name,
+            value: `**${entry.grade}** · **${entry.score.toLocaleString('en-US')}** · ${entry.percent.toFixed(2)}%\n${tags.join(' · ')}\n\`${judgements}\``,
+            inline: true,
+        };
+    };
+
+    const outcome = {
+        player1: `Point to ${sides[0].name}`,
+        player2: `Point to ${sides[1].name}`,
+        none: 'No point given',
+        replay: 'Set will be replayed',
+    }[results.outcome] || '';
+    const score = `${sides[0].name} ${results.score?.player1 ?? 0} - ${results.score?.player2 ?? 0} ${sides[1].name}`;
+    const matchWinner = results.matchWinner ? sides[results.matchWinner === 'player1' ? 0 : 1].name : null;
+
+    const embed = new EmbedBuilder()
+        .setTitle(`Set ${results.set} of ${results.sets} · ${results.chart?.title || 'Unknown chart'}`)
+        .setDescription([results.chart?.artist, outcome].filter(Boolean).join('\n'))
+        .addFields(field(sides[0], 'player1'), field(sides[1], 'player2'))
+        .setFooter({ text: matchWinner ? `${score} · ${matchWinner} takes the match!` : score })
+        .setTimestamp();
+    if (results.chart?.id) embed.setURL(`https://spinsha.re/song/${results.chart.id}`);
+    if (winnerKey) embed.setColor(winnerKey === 'player1' ? 0x4fc3f7 : 0xf06292);
+    return embed;
+}
+
+// The ref channel of the guild the bot is in a call in, or the only one configured
+function findRefChannelId() {
+    const voiceGuild = getVoiceConnections().values().next().value?.joinConfig.guildId;
+    if (voiceGuild && guildConfig[voiceGuild]?.refChannel) return guildConfig[voiceGuild].refChannel;
+
+    const channels = Object.values(guildConfig).map(config => config.refChannel).filter(Boolean);
+    if (channels.length === 1) return channels[0];
+    throw new Error(channels.length ? 'Several ref channels set, join a voice channel to pick one' : 'No ref channel set');
+}
+
 function getStatus() {
     const voice = [];
     getVoiceConnections().forEach(connection => {
@@ -551,6 +613,16 @@ async function handleWsCommand(ws, msg) {
             setRefChannel(msg.guild_id, msg.channel_id || null);
             reply(getStatus());
             break;
+
+        case 'post_results': {
+            if (!client.isReady()) throw new Error('Bot is not logged in');
+            if (!msg.results) throw new Error('Missing results');
+            const channel = await client.channels.fetch(findRefChannelId()).catch(() => null);
+            if (!channel || !channel.isTextBased()) throw new Error('Ref channel not found');
+            const message = await channel.send({ embeds: [resultsEmbed(msg.results)] });
+            reply({ message_id: message.id });
+            break;
+        }
 
         case 'shutdown':
             reply({});
