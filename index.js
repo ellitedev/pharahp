@@ -499,33 +499,42 @@ function resultsEmbed(results) {
         if (entry.forfeited) tags.push('Forfeited');
         if (entry.attempts > 1) tags.push(`best of ${entry.attempts}`);
 
-        const judgements = [['perfectPlus', 'P+'], ['perfect', 'P'], ['great', 'Gr'], ['good', 'Gd'], ['okay', 'Ok']]
-            .map(([judgement, label]) => `${label} ${judgementTotal(entry, judgement)}`)
-            .join(' · ') + ` · Miss ${entry.judgements?.failed || 0}`;
+        // One per line, padded so the counts line up in the code block
+        const judgements = [...[['perfectPlus', 'Perfect+'], ['perfect', 'Perfect'], ['great', 'Great'], ['good', 'Good'], ['okay', 'Okay']]
+            .map(([judgement, label]) => [label, judgementTotal(entry, judgement)]), ['Miss', entry.judgements?.failed || 0]];
+        const countWidth = Math.max(...judgements.map(([, count]) => `${count}`.length));
+        const judgementList = judgements.map(([label, count]) => `${label.padEnd(8)} ${`${count}`.padStart(countWidth)}`).join('\n');
 
         return {
             name,
-            value: `**${entry.grade}** · **${entry.score.toLocaleString('en-US')}** · ${entry.percent.toFixed(2)}%\n${tags.join(' · ')}\n\`${judgements}\``,
+            value: `**${entry.grade}** · **${entry.score.toLocaleString('en-US')}** · ${entry.percent.toFixed(2)}%\n${tags.join(' · ')}\n\`\`\`\n${judgementList}\n\`\`\``,
             inline: true,
         };
     };
 
+    // The winner field already says who got the point
     const outcome = {
-        player1: `Point to ${sides[0].name}`,
-        player2: `Point to ${sides[1].name}`,
         none: 'No point given',
         replay: 'Set will be replayed',
     }[results.outcome] || '';
     const score = `${sides[0].name} ${results.score?.player1 ?? 0} - ${results.score?.player2 ?? 0} ${sides[1].name}`;
     const matchWinner = results.matchWinner ? sides[results.matchWinner === 'player1' ? 0 : 1].name : null;
 
+    // Headings only render in the description, not the title
+    const title = results.chart?.title || 'Unknown chart';
+    const description = [
+        `# Set ${results.set} of ${results.sets}`,
+        results.chart?.id ? `[${title.replace(/[[\]]/g, '\\$&')}](https://spinsha.re/song/${results.chart.id})` : title,
+        results.chart?.artist && `-# By ${results.chart.artist}`,
+        results.chart?.charter && `-# Charted by ${results.chart.charter}`,
+        outcome && `\n${outcome}`,
+    ];
+
     const embed = new EmbedBuilder()
-        .setTitle(`Set ${results.set} of ${results.sets} · ${results.chart?.title || 'Unknown chart'}`)
-        .setDescription([results.chart?.artist, outcome].filter(Boolean).join('\n'))
+        .setDescription(description.filter(Boolean).join('\n'))
         .addFields(field(sides[0], 'player1'), field(sides[1], 'player2'))
         .setFooter({ text: matchWinner ? `${score} · ${matchWinner} takes the match!` : score })
         .setTimestamp();
-    if (results.chart?.id) embed.setURL(`https://spinsha.re/song/${results.chart.id}`);
     if (winnerKey) embed.setColor(winnerKey === 'player1' ? 0x4fc3f7 : 0xf06292);
     return embed;
 }
