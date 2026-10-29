@@ -30,9 +30,10 @@ send `{ "type": "<command>", "key": "<wsskey>", "request_id": "<optional>", ... 
 
 | command | fields | answer |
 | --- | --- | --- |
-| `status` | | `ready`, `username`, `voice: [{guild_id, channel_id}]`, `ref_channels: {guildId: channelId}` |
-| `list_channels` | | `guilds: [{id, name, voice: [{id, name}], text: [{id, name}]}]` |
+| `status` | | `ready`, `username`, `voice: [{guild_id, channel_id}]`, `ref_channels: {guildId: channelId}`, `spotlight_roles: {guildId: roleId}` |
+| `list_channels` | | `guilds: [{id, name, voice: [{id, name}], text: [{id, name}], roles: [{id, name, color}]}]` |
 | `join` | `channel_id` | status |
 | `leave` | `guild_id` (optional, leaves all) | status |
 | `set_ref_channel` | `guild_id`, `channel_id` (null clears) | status |
+| `set_spotlight_role` | `guild_id`, `role_id` (null clears), ref channel messages from it get `spotlight: true` | status |
 | `shutdown` | | leaves vc and exits |

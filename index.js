@@ -1,4 +1,4 @@
-const { Client, Events, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType, EmbedBuilder } = require('discord.js');
+const { Client, Events, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType, EmbedBuilder, MessageType } = require('discord.js');
 const { joinVoiceChannel, getVoiceConnection, getVoiceConnections, VoiceConnectionStatus, EndBehaviorType } = require('@discordjs/voice');
 const pjson = require('./package.json');
 const fs = require('fs');
@@ -311,7 +311,44 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
     }
 });
 
+// Names for the <@id>, <@&id> and <#id> in a message, the screens only get the raw content
+function mentionNames(message) {
+    const users = {};
+    message.mentions.users.forEach((user, id) => {
+        users[id] = message.mentions.members?.get(id)?.displayName || user.globalName || user.username;
+    });
+    const roles = {};
+    message.mentions.roles.forEach((role, id) => {
+        roles[id] = { name: role.name, color: role.hexColor };
+    });
+    const channels = {};
+    for (const [, id] of (message.content || '').matchAll(/<#(\d+)>/g)) {
+        const channel = message.guild?.channels.cache.get(id);
+        if (channel) channels[id] = channel.name;
+    }
+    return { users, roles, channels };
+}
+
+// Who a reply answers and a bit of what they said, null for normal messages
+async function replyInfo(message) {
+    // Forwards and pins carry a reference too
+    if (message.type !== MessageType.Reply || !message.reference?.messageId) return null;
+    const replied = await message.fetchReference().catch(() => null);
+    if (!replied) return { author: null, content: '' };
+    return {
+        author: replied.member?.displayName || replied.author.globalName || replied.author.username,
+        color: replied.member?.roles.highest.hexColor || '#000000',
+        content: replied.cleanContent.slice(0, 200),
+    };
+}
+
+// Fetching a reply's message takes a round trip, the queue keeps them in order with the messages after it
+let messageQueue = Promise.resolve();
 client.on('messageCreate', message => {
+    messageQueue = messageQueue.then(() => relayMessage(message)).catch(() => {});
+});
+
+async function relayMessage(message) {
     // Posted results are embeds without text, they'd show up empty in the ref den
     if (!message.guildId || message.author.id === client.user?.id) return;
     const guildRefChannel = guildConfig[message.guildId]?.refChannel;
@@ -329,13 +366,17 @@ client.on('messageCreate', message => {
                 role: message.member?.roles.highest.name || 'Bot',
                 color: message.member?.roles.highest.hexColor || '#000000',
                 content: content,
+                mentions: mentionNames(message),
+                reply: await replyInfo(message),
+                // Has the spotlight role, the panel can offer to show it big
+                spotlight: !!guildConfig[message.guildId]?.spotlightRole && !!message.member?.roles.cache.has(guildConfig[message.guildId].spotlightRole),
                 timestamp: message.createdTimestamp,
                 isBot: message.author.bot
             }
         };
         sendToWs(newMsg);
     }
-});
+}
 
 client.on('messageUpdate', (oldMessage, newMessage) => {
     if (newMessage.partial) return;
@@ -351,6 +392,7 @@ client.on('messageUpdate', (oldMessage, newMessage) => {
                 channelId: newMessage.channelId,
                 author: newMessage.member?.displayName || newMessage.author.username,
                 content: newMessage.content,
+                mentions: mentionNames(newMessage),
                 timestamp: newMessage.editedTimestamp,
                 isBot: newMessage.author.bot
             }
@@ -464,20 +506,24 @@ function leaveChannel(guildId) {
     return true;
 }
 
-function setRefChannel(guildId, channelId) {
-    if (channelId) {
+function setGuildConfig(guildId, key, value) {
+    if (value) {
         if (!guildConfig[guildId]) {
             guildConfig[guildId] = {};
         }
-        guildConfig[guildId].refChannel = channelId;
+        guildConfig[guildId][key] = value;
     } else if (guildConfig[guildId]) {
-        delete guildConfig[guildId].refChannel;
+        delete guildConfig[guildId][key];
         if (Object.keys(guildConfig[guildId]).length === 0) {
             delete guildConfig[guildId];
         }
     }
     saveConfig();
 }
+
+const setRefChannel = (guildId, channelId) => setGuildConfig(guildId, 'refChannel', channelId);
+// Messages from members with this role can be put up big on stream, the panel asks first
+const setSpotlightRole = (guildId, roleId) => setGuildConfig(guildId, 'spotlightRole', roleId);
 
 const fullComboLabels = { okay: 'FC (Okay)', good: 'FC (Good)', great: 'FC (Great)', perfect: 'FC (Perfect)', perfectPlus: 'FC (Perfect+)' };
 // Plain judgement counts are the late hits only, the totals add the early ones
@@ -499,11 +545,20 @@ function resultsEmbed(results) {
         if (entry.forfeited) tags.push('Forfeited');
         if (entry.attempts > 1) tags.push(`best of ${entry.attempts}`);
 
-        // One per line, padded so the counts line up in the code block
-        const judgements = [...[['perfectPlus', 'Perfect+'], ['perfect', 'Perfect'], ['great', 'Great'], ['good', 'Good'], ['okay', 'Okay']]
-            .map(([judgement, label]) => [label, judgementTotal(entry, judgement)]), ['Miss', entry.judgements?.failed || 0]];
-        const countWidth = Math.max(...judgements.map(([, count]) => `${count}`.length));
-        const judgementList = judgements.map(([label, count]) => `${label.padEnd(8)} ${`${count}`.padStart(countWidth)}`).join('\n');
+        // Total, early and late per judgement, padded so the columns line up in the code block.
+        // Plain counts are the late ones, perfect+ and misses have no early/late split
+        const early = (key) => entry.judgements?.[`early${key[0].toUpperCase()}${key.slice(1)}`] || 0;
+        const rows = [
+            ['', 'All', 'Early', 'Late'],
+            ['Perfect+', judgementTotal(entry, 'perfectPlus'), '', ''],
+            ...[['perfect', 'Perfect'], ['great', 'Great'], ['good', 'Good'], ['okay', 'Okay']]
+                .map(([key, label]) => [label, judgementTotal(entry, key), early(key), entry.judgements?.[key] || 0]),
+            ['Miss', entry.judgements?.failed || 0, '', ''],
+        ].map(row => row.map(cell => `${cell}`));
+        const widths = [0, 1, 2, 3].map(column => Math.max(...rows.map(row => row[column].length)));
+        const judgementList = rows
+            .map(row => row.map((cell, column) => (column ? cell.padStart(widths[column]) : cell.padEnd(widths[column]))).join(' ').trimEnd())
+            .join('\n');
 
         return {
             name,
@@ -539,6 +594,27 @@ function resultsEmbed(results) {
     return embed;
 }
 
+// The whole match once it's won: final score and every counted set
+function matchEmbed(results) {
+    const names = [results.player1?.name || 'Unknown', results.player2?.name || 'Unknown'];
+    const winnerIndex = results.matchWinner === 'player1' ? 0 : 1;
+    const sets = (results.history || []).map((set, index) => {
+        const score = (entry) => (entry ? entry.score.toLocaleString('en-US') : 'DNF');
+        const winner = set.winner === 'player1' ? names[0] : set.winner === 'player2' ? names[1] : null;
+        return `**Set ${index + 1}** · ${set.title || 'Unknown chart'}\n-# ${score(set.player1)} - ${score(set.player2)}${winner ? ` · ${winner}` : ''}`;
+    });
+
+    return new EmbedBuilder()
+        .setDescription([
+            '# Match results',
+            `## ${names[winnerIndex]} takes the match!`,
+            `${names[0]} **${results.score?.player1 ?? 0} - ${results.score?.player2 ?? 0}** ${names[1]}`,
+            sets.length && `\n${sets.join('\n')}`,
+        ].filter(Boolean).join('\n'))
+        .setColor(winnerIndex === 0 ? 0x4fc3f7 : 0xf06292)
+        .setTimestamp();
+}
+
 // The ref channel of the guild the bot is in a call in, or the only one configured
 function findRefChannelId() {
     const voiceGuild = getVoiceConnections().values().next().value?.joinConfig.guildId;
@@ -560,6 +636,9 @@ function getStatus() {
         voice,
         ref_channels: Object.fromEntries(
             Object.entries(guildConfig).map(([guildId, config]) => [guildId, config.refChannel || null])
+        ),
+        spotlight_roles: Object.fromEntries(
+            Object.entries(guildConfig).map(([guildId, config]) => [guildId, config.spotlightRole || null])
         ),
     };
 }
@@ -594,6 +673,11 @@ async function handleWsCommand(ws, msg) {
                     .filter(channel => channel.type === ChannelType.GuildText)
                     .sort((a, b) => a.rawPosition - b.rawPosition)
                     .map(channel => ({ id: channel.id, name: channel.name })),
+                // Highest first like in discord, without @everyone and bot roles
+                roles: guild.roles.cache
+                    .filter(role => role.id !== guild.id && !role.managed)
+                    .sort((a, b) => b.position - a.position)
+                    .map(role => ({ id: role.id, name: role.name, color: role.hexColor })),
             }));
             reply({ guilds });
             break;
@@ -623,12 +707,20 @@ async function handleWsCommand(ws, msg) {
             reply(getStatus());
             break;
 
+        case 'set_spotlight_role':
+            if (!msg.guild_id) throw new Error('Missing guild_id');
+            setSpotlightRole(msg.guild_id, msg.role_id || null);
+            reply(getStatus());
+            break;
+
         case 'post_results': {
             if (!client.isReady()) throw new Error('Bot is not logged in');
             if (!msg.results) throw new Error('Missing results');
             const channel = await client.channels.fetch(findRefChannelId()).catch(() => null);
             if (!channel || !channel.isTextBased()) throw new Error('Ref channel not found');
-            const message = await channel.send({ embeds: [resultsEmbed(msg.results)] });
+            const embeds = [resultsEmbed(msg.results)];
+            if (msg.results.matchWinner && msg.results.history?.length) embeds.push(matchEmbed(msg.results));
+            const message = await channel.send({ embeds });
             reply({ message_id: message.id });
             break;
         }
