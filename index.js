@@ -539,7 +539,9 @@ function resultsEmbed(results) {
         const name = `${key === winnerKey ? 'WINNER · ' : ''}${side.name || 'Unknown'}`;
         if (!entry) return { name, value: 'Did not finish', inline: true };
 
-        const tags = [`${entry.difficulty} ${entry.difficultyRating}`, `${entry.maxCombo}x combo`];
+        const tags = [`${entry.maxCombo}x combo`];
+        // Only the difficulty is required by the feed schema, the rating may be missing
+        if (entry.difficulty && entry.difficulty !== 'Unknown') tags.unshift(entry.difficultyRating ? `${entry.difficulty} ${entry.difficultyRating}` : entry.difficulty);
         if (fullComboLabels[entry.fullCombo]) tags.push(fullComboLabels[entry.fullCombo]);
         if (entry.failed) tags.push('Failed');
         if (entry.forfeited) tags.push('Forfeited');
@@ -562,7 +564,7 @@ function resultsEmbed(results) {
 
         return {
             name,
-            value: `**${entry.grade}** · **${entry.score.toLocaleString('en-US')}** · ${entry.percent.toFixed(2)}%\n${tags.join(' · ')}\n\`\`\`\n${judgementList}\n\`\`\``,
+            value: `**${entry.grade}** · **${entry.score.toLocaleString('en-US')}** · ${entry.percent.toFixed(2)}%\n${tags.join(' · ')}${entry.judgements ? `\n\`\`\`\n${judgementList}\n\`\`\`` : ''}`,
             inline: true,
         };
     };
