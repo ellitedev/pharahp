@@ -548,12 +548,13 @@ function resultsEmbed(results) {
         if (entry.attempts > 1) tags.push(`best of ${entry.attempts}`);
 
         // Total, early and late per judgement, padded so the columns line up in the code block.
-        // Plain counts are the late ones, perfect+ and misses have no early/late split
+        // Plain counts are the late ones, perfect+ and misses have no early/late split.
+        // Short labels, two inline fields side by side wrap past ~23 chars per line (4 digit counts did)
         const early = (key) => entry.judgements?.[`early${key[0].toUpperCase()}${key.slice(1)}`] || 0;
         const rows = [
             ['', 'All', 'Early', 'Late'],
-            ['Perfect+', judgementTotal(entry, 'perfectPlus'), '', ''],
-            ...[['perfect', 'Perfect'], ['great', 'Great'], ['good', 'Good'], ['okay', 'Okay']]
+            ['Perf+', judgementTotal(entry, 'perfectPlus'), '', ''],
+            ...[['perfect', 'Perf'], ['great', 'Great'], ['good', 'Good'], ['okay', 'Okay']]
                 .map(([key, label]) => [label, judgementTotal(entry, key), early(key), entry.judgements?.[key] || 0]),
             ['Miss', entry.judgements?.failed || 0, '', ''],
         ].map(row => row.map(cell => `${cell}`));
@@ -582,6 +583,7 @@ function resultsEmbed(results) {
     const description = [
         `# Set ${results.set} of ${results.sets}`,
         results.chart?.id ? `[${title.replace(/[[\]]/g, '\\$&')}](https://spinsha.re/song/${results.chart.id})` : title,
+        results.chart?.id && `-# [SpinShare](https://spinsha.re/song/${results.chart.id}) · [spulti](https://spulti.ellite.dev/charts/${results.chart.id})`,
         results.chart?.artist && `-# By ${results.chart.artist}`,
         results.chart?.charter && `-# Charted by ${results.chart.charter}`,
         outcome && `\n${outcome}`,
@@ -611,6 +613,7 @@ function matchEmbed(results) {
             '# Match results',
             `## ${names[winnerIndex]} takes the match!`,
             `${names[0]} **${results.score?.player1 ?? 0} - ${results.score?.player2 ?? 0}** ${names[1]}`,
+            results.spultiMatchId && `-# [Match on spulti](https://spulti.ellite.dev/matches/${encodeURIComponent(results.spultiMatchId)})`,
             sets.length && `\n${sets.join('\n')}`,
         ].filter(Boolean).join('\n'))
         .setColor(winnerIndex === 0 ? 0x4fc3f7 : 0xf06292)
